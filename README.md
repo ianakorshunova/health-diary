@@ -65,15 +65,21 @@ Clone the repository:
 ```bash
 git clone https://github.com/ianakorshunova/health-diary.git
 cd health-diary
+```
 
 Install dependencies:
 
+```bash
 pip install -r requirements.txt
+```
 
-## Run the app:
+Run the app:
 
+```bash
 streamlit run app.py
-Project Structure
+```
+
+## Project Structure
 
 ```text
 health-diary/
@@ -83,17 +89,17 @@ health-diary/
 └── README.md
 ```
 
-The app automatically creates a local data/health_log.csv file when records are added.
+The app automatically creates a local `data/health_log.csv` file when records are added.
 
 ## Notes
 
 The interface is currently in Russian because the app was designed for family use.
 
-## Possible future improvements:
+## Possible future improvements
 
-Add English interface option
-Add sample demo data
-Add more detailed monthly summaries
-Add optional export to Excel
-Improve mobile layout
-Add safer record deletion by selecting a specific record
+- Add English interface option
+- Add sample demo data
+- Add more detailed monthly summaries
+- Add optional export to Excel
+- Improve mobile layout
+- Add safer record deletion by selecting a specific record
