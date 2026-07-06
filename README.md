@@ -58,11 +58,12 @@ This app is intended only for personal tracking and record keeping.
 
 It does not provide medical advice, diagnosis, or treatment recommendations. Please consult a qualified healthcare professional for medical concerns.
 
-How to Run Locally
+## How to Run Locally
 
 Clone the repository:
 
-git clone https://github.com/YOUR-USERNAME/health-diary.git
+```bash
+git clone https://github.com/ianakorshunova/health-diary.git
 cd health-diary
 
 Install dependencies:
