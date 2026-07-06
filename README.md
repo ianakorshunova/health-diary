@@ -1,5 +1,3 @@
-И вставь туда:
-
 # Health Diary ❤️
 
 A simple Russian-language Streamlit app for tracking personal health records: blood pressure, pulse, oxygen level, and general well-being.
