@@ -46,6 +46,7 @@ Health records are stored locally in:
 
 ```text
 data/health_log.csv
+```
 
 The data/ folder is excluded from GitHub via .gitignore.
 
