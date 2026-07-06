@@ -73,11 +73,14 @@ pip install -r requirements.txt
 
 streamlit run app.py
 Project Structure
+
+```text
 health-diary/
 ├── app.py
 ├── requirements.txt
 ├── .gitignore
 └── README.md
+```
 
 The app automatically creates a local data/health_log.csv file when records are added.
 
