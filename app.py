@@ -123,14 +123,21 @@ def save_record(record):
     supabase.table("health_records").insert(supabase_record).execute()
 
 def delete_last_record():
-    df = load_data()
+    supabase = get_supabase_client()
 
-    if df.empty:
+    response = (
+        supabase.table("health_records")
+        .select("id")
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+
+    if not response.data:
         return False
 
-    latest_record_id = df.iloc[0]["id"]
+    latest_record_id = response.data[0]["id"]
 
-    supabase = get_supabase_client()
     supabase.table("health_records").delete().eq("id", int(latest_record_id)).execute()
 
     return True
