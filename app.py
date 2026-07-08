@@ -1,7 +1,7 @@
 import os
 import calendar
 from datetime import date, datetime
-
+from supabase import create_client, Client
 
 import altair as alt
 import pandas as pd
@@ -21,6 +21,18 @@ COLUMN_NAMES_RU = {
     "feeling": "Самочувствие",
     "comment": "Комментарий",
 }
+
+APP_COLUMNS = [
+    "id",
+    "date",
+    "time",
+    "systolic",
+    "diastolic",
+    "pulse",
+    "oxygen",
+    "feeling",
+    "comment",
+]
 
 MONTH_NAMES_RU = [
     "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
@@ -48,8 +60,43 @@ def ensure_data_file():
 
 
 def load_data():
-    ensure_data_file()
-    df = pd.read_csv(DATA_FILE)
+    supabase = get_supabase_client()
+
+    response = (
+        supabase.table("health_records")
+        .select("*")
+        .order("record_date", desc=True)
+        .order("record_time", desc=True)
+        .execute()
+    )
+
+    records = response.data
+
+    if not records:
+        return pd.DataFrame(columns=APP_COLUMNS)
+
+    df = pd.DataFrame(records)
+
+    df = df.rename(
+        columns={
+            "record_date": "date",
+            "record_time": "time",
+        }
+    )
+
+    df = df[
+        [
+            "id",
+            "date",
+            "time",
+            "systolic",
+            "diastolic",
+            "pulse",
+            "oxygen",
+            "feeling",
+            "comment",
+        ]
+    ]
 
     numeric_columns = ["systolic", "diastolic", "pulse", "oxygen"]
 
@@ -60,12 +107,20 @@ def load_data():
 
 
 def save_record(record):
-    ensure_data_file()
+    supabase = get_supabase_client()
 
-    df = load_data()
-    new_row = pd.DataFrame([record])
-    df = pd.concat([df, new_row], ignore_index=True)
-    df.to_csv(DATA_FILE, index=False)
+    supabase_record = {
+        "record_date": record["date"],
+        "record_time": record["time"],
+        "systolic": record["systolic"],
+        "diastolic": record["diastolic"],
+        "pulse": record["pulse"],
+        "oxygen": record["oxygen"],
+        "feeling": record["feeling"],
+        "comment": record["comment"],
+    }
+
+    supabase.table("health_records").insert(supabase_record).execute()
 
 def delete_last_record():
     df = load_data()
@@ -73,20 +128,29 @@ def delete_last_record():
     if df.empty:
         return False
 
-    df = df.iloc[:-1]
-    df.to_csv(DATA_FILE, index=False)
+    latest_record_id = df.iloc[0]["id"]
+
+    supabase = get_supabase_client()
+    supabase.table("health_records").delete().eq("id", int(latest_record_id)).execute()
+
     return True
 
-def update_record(row_index, updated_record):
-    df = load_data()
+def update_record(record_id, updated_record):
+    supabase = get_supabase_client()
 
-    if df.empty or row_index not in df.index:
-        return False
+    supabase_record = {
+        "record_date": updated_record["date"],
+        "record_time": updated_record["time"],
+        "systolic": updated_record["systolic"],
+        "diastolic": updated_record["diastolic"],
+        "pulse": updated_record["pulse"],
+        "oxygen": updated_record["oxygen"],
+        "feeling": updated_record["feeling"],
+        "comment": updated_record["comment"],
+    }
 
-    for column, value in updated_record.items():
-        df.loc[row_index, column] = value
+    supabase.table("health_records").update(supabase_record).eq("id", int(record_id)).execute()
 
-    df.to_csv(DATA_FILE, index=False)
     return True
 
 def value_or_default(value, default):
@@ -125,6 +189,20 @@ def format_display_value(value):
 
     return str(value)
 
+def get_supabase_client():
+    supabase_url = st.secrets["SUPABASE_URL"]
+    supabase_key = st.secrets["SUPABASE_KEY"]
+
+    return create_client(supabase_url, supabase_key)
+
+def parse_time_value(value):
+    time_text = str(value)
+
+    try:
+        return datetime.strptime(time_text, "%H:%M").time()
+    except ValueError:
+        return datetime.strptime(time_text, "%H:%M:%S").time()
+
 st.set_page_config(
     page_title="Дневник здоровья",
     page_icon="❤️",
@@ -132,6 +210,14 @@ st.set_page_config(
 )
 
 st.title("❤️ Дневник здоровья")
+with st.expander("Проверка подключения к Supabase"):
+    try:
+        supabase = get_supabase_client()
+        response = supabase.table("health_records").select("id").limit(1).execute()
+        st.success("Supabase подключён. Таблица health_records доступна.")
+    except Exception as error:
+        st.error("Не удалось подключиться к Supabase.")
+        st.code(str(error))
 st.caption("Личный дневник давления, пульса, кислорода и самочувствия.")
 
 st.markdown(
@@ -411,10 +497,11 @@ with tab_history:
             & (df["date"].dt.month == history_month)
         ].copy()
 
-        filtered_df = filtered_df.drop(columns=["datetime"])
+        filtered_df = filtered_df.drop(columns=["datetime"], errors="ignore")
 
         display_df = filtered_df.copy()
 
+        display_df = display_df.drop(columns=["id"], errors="ignore")
         display_df["date"] = pd.to_datetime(display_df["date"]).dt.strftime("%d.%m.%Y")
 
         numeric_columns = ["systolic", "diastolic", "pulse", "oxygen"]
@@ -458,25 +545,22 @@ with tab_history:
                 f"SpO₂: {row['oxygen'] if pd.notna(row['oxygen']) else 'не измерен'}, "
                 f"{row['feeling']}"
             )
-            record_options[label] = row_index
+            record_options[label] = row["id"]
 
         selected_label = st.selectbox(
             "Выберите запись для редактирования",
             list(record_options.keys()),
         )
 
-        selected_index = record_options[selected_label]
-        selected_record = df.loc[selected_index]
+        selected_record_id = record_options[selected_label]
+        selected_record = df[df["id"] == selected_record_id].iloc[0]
 
         with st.form("edit_record_form"):
             st.write("Изменить выбранную запись")
 
             edit_date = pd.to_datetime(selected_record["date"]).date()
 
-            edit_time_value = datetime.strptime(
-                str(selected_record["time"]),
-                "%H:%M",
-            ).time()
+            edit_time_value = parse_time_value(selected_record["time"])
 
             col_edit1, col_edit2 = st.columns(2)
 
@@ -493,7 +577,7 @@ with tab_history:
                         min_value=1,
                         max_value=31,
                         value=edit_day,
-                        key=f"edit_day_{selected_index}",
+                        key=f"edit_day_{selected_record_id}",
                     )
 
                 with col_edit_month:
@@ -502,7 +586,7 @@ with tab_history:
                         options=list(range(1, 13)),
                         format_func=lambda x: MONTH_NAMES_RU[x - 1],
                         index=edit_month - 1,
-                        key=f"edit_month_{selected_index}",
+                        key=f"edit_month_{selected_record_id}",
                     )
 
                 with col_edit_year:
@@ -511,7 +595,7 @@ with tab_history:
                         min_value=2020,
                         max_value=2100,
                         value=edit_year,
-                        key=f"edit_year_{selected_index}",
+                        key=f"edit_year_{selected_record_id}",
                     )
 
                 days_in_new_month = calendar.monthrange(new_year, new_month)[1]
@@ -525,13 +609,13 @@ with tab_history:
                 new_time = st.time_input(
                     "Время",
                     value=edit_time_value,
-                    key=f"edit_time_{selected_index}",
+                    key=f"edit_time_{selected_record_id}",
                 )
 
                 pressure_not_measured_edit = st.checkbox(
                     "Давление не измерено",
                     value=pd.isna(selected_record["systolic"]) and pd.isna(selected_record["diastolic"]),
-                    key=f"edit_pressure_not_measured_{selected_index}",
+                    key=f"edit_pressure_not_measured_{selected_record_id}",
                 )
 
                 if pressure_not_measured_edit:
@@ -543,7 +627,7 @@ with tab_history:
                         min_value=50,
                         max_value=250,
                         value=value_or_default(selected_record["systolic"], 120),
-                        key=f"edit_systolic_{selected_index}",
+                        key=f"edit_systolic_{selected_record_id}",
                     )
 
                     new_diastolic = st.number_input(
@@ -551,14 +635,14 @@ with tab_history:
                         min_value=30,
                         max_value=160,
                         value=value_or_default(selected_record["diastolic"], 80),
-                        key=f"edit_diastolic_{selected_index}",
+                        key=f"edit_diastolic_{selected_record_id}",
                     )
 
             with col_edit2:
                 pulse_not_measured_edit = st.checkbox(
                     "Пульс не измерен",
                     value=pd.isna(selected_record["pulse"]),
-                    key=f"edit_pulse_not_measured_{selected_index}",
+                    key=f"edit_pulse_not_measured_{selected_record_id}",
                 )
 
                 if pulse_not_measured_edit:
@@ -569,13 +653,13 @@ with tab_history:
                         min_value=30,
                         max_value=220,
                         value=value_or_default(selected_record["pulse"], 70),
-                        key=f"edit_pulse_{selected_index}",
+                        key=f"edit_pulse_{selected_record_id}",
                     )
 
                 oxygen_not_measured_edit = st.checkbox(
                     "Кислород не измерен",
                     value=pd.isna(selected_record["oxygen"]),
-                    key=f"edit_oxygen_not_measured_{selected_index}",
+                    key=f"edit_oxygen_not_measured_{selected_record_id}",
                 )
 
                 if oxygen_not_measured_edit:
@@ -586,20 +670,29 @@ with tab_history:
                         min_value=50,
                         max_value=100,
                         value=value_or_default(selected_record["oxygen"], 98),
-                        key=f"edit_oxygen_{selected_index}",
+                        key=f"edit_oxygen_{selected_record_id}",
                     )
 
                 new_feeling = st.selectbox(
                     "Самочувствие",
                     ["Хорошее", "Нормальное", "Плохое"],
                     index=["Хорошее", "Нормальное", "Плохое"].index(selected_record["feeling"]),
-                    key=f"edit_feeling_{selected_index}",
+                    key=f"edit_feeling_{selected_record_id}",
                 )
+
+                comment_value = selected_record.get("comment", "")
+
+                if pd.isna(comment_value):
+                    comment_value = ""
+                else:
+                    comment_value = str(comment_value)
+
+                comment_key = f"edit_comment_{selected_record_id}_{len(comment_value)}"
 
                 new_comment = st.text_area(
                     "Комментарий",
-                    value="" if pd.isna(selected_record["comment"]) else str(selected_record["comment"]),
-                    key=f"edit_comment_{selected_index}",
+                    value=comment_value,
+                    key=comment_key,
                 )
 
             save_changes = st.form_submit_button("💾 Сохранить изменения")
@@ -616,7 +709,7 @@ with tab_history:
                     "comment": new_comment,
                 }
 
-                updated = update_record(selected_index, updated_record)
+                updated = update_record(selected_record_id, updated_record)
 
                 if updated:
                     st.success("Запись обновлена.")
