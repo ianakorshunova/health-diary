@@ -160,6 +160,173 @@ def update_record(record_id, updated_record):
 
     return True
 
+def import_backup_to_supabase(uploaded_file):
+    try:
+        backup_df = pd.read_csv(uploaded_file)
+    except Exception:
+        return False, "Не удалось прочитать CSV-файл."
+
+    reverse_column_names = {
+        "Дата": "date",
+        "Время": "time",
+        "Верхнее давление": "systolic",
+        "Нижнее давление": "diastolic",
+        "Пульс": "pulse",
+        "Кислород SpO₂": "oxygen",
+        "Самочувствие": "feeling",
+        "Комментарий": "comment",
+    }
+
+    backup_df = backup_df.rename(columns=reverse_column_names)
+
+    required_columns = [
+        "date",
+        "time",
+        "systolic",
+        "diastolic",
+        "pulse",
+        "oxygen",
+        "feeling",
+        "comment",
+    ]
+
+    missing_columns = [column for column in required_columns if column not in backup_df.columns]
+
+    if missing_columns:
+        return False, f"В файле не хватает колонок: {', '.join(missing_columns)}"
+
+    backup_df = backup_df[required_columns].copy()
+    backup_df = backup_df.replace("Не измерено", pd.NA)
+
+    backup_df["date"] = pd.to_datetime(
+        backup_df["date"],
+        errors="coerce",
+        dayfirst=True,
+    )
+
+    if backup_df["date"].isna().any():
+        return False, "В файле есть строки с некорректной датой."
+
+    backup_df["date"] = backup_df["date"].dt.strftime("%Y-%m-%d")
+    backup_df["time"] = backup_df["time"].astype(str).str.slice(0, 5)
+
+    numeric_columns = ["systolic", "diastolic", "pulse", "oxygen"]
+
+    for column in numeric_columns:
+        backup_df[column] = pd.to_numeric(backup_df[column], errors="coerce")
+
+    backup_df["feeling"] = backup_df["feeling"].fillna("Нормальное")
+    backup_df["comment"] = backup_df["comment"].fillna("")
+
+    # records_to_insert = []
+
+    # for _, row in backup_df.iterrows():
+    #     record = {
+    #         "record_date": row["date"],
+    #         "record_time": row["time"],
+    #         "systolic": None if pd.isna(row["systolic"]) else int(row["systolic"]),
+    #         "diastolic": None if pd.isna(row["diastolic"]) else int(row["diastolic"]),
+    #         "pulse": None if pd.isna(row["pulse"]) else int(row["pulse"]),
+    #         "oxygen": None if pd.isna(row["oxygen"]) else int(row["oxygen"]),
+    #         "feeling": row["feeling"],
+    #         "comment": row["comment"],
+    #     }
+
+    #     records_to_insert.append(record)
+
+    # if not records_to_insert:
+    #     return False, "В файле нет записей для импорта."
+
+    # supabase = get_supabase_client()
+    # supabase.table("health_records").insert(records_to_insert).execute()
+
+    # return True, f"Импортировано записей: {len(records_to_insert)}."
+
+    def normalize_time_for_key(value):
+        return str(value)[:5]
+
+
+    def normalize_optional_int(value):
+        if pd.isna(value):
+            return None
+
+        return int(value)
+
+
+    def normalize_text(value):
+        if pd.isna(value):
+            return ""
+
+        return str(value).strip()
+
+
+    existing_df = load_data()
+    existing_keys = set()
+
+    for _, existing_row in existing_df.iterrows():
+        existing_key = (
+            str(existing_row["date"]),
+            normalize_time_for_key(existing_row["time"]),
+            normalize_optional_int(existing_row["systolic"]),
+            normalize_optional_int(existing_row["diastolic"]),
+            normalize_optional_int(existing_row["pulse"]),
+            normalize_optional_int(existing_row["oxygen"]),
+            normalize_text(existing_row["feeling"]),
+            normalize_text(existing_row["comment"]),
+        )
+
+        existing_keys.add(existing_key)
+
+
+    records_to_insert = []
+    skipped_duplicates = 0
+
+    for _, row in backup_df.iterrows():
+        record_key = (
+            row["date"],
+            normalize_time_for_key(row["time"]),
+            normalize_optional_int(row["systolic"]),
+            normalize_optional_int(row["diastolic"]),
+            normalize_optional_int(row["pulse"]),
+            normalize_optional_int(row["oxygen"]),
+            normalize_text(row["feeling"]),
+            normalize_text(row["comment"]),
+        )
+
+        if record_key in existing_keys:
+            skipped_duplicates += 1
+            continue
+
+        record = {
+            "record_date": row["date"],
+            "record_time": normalize_time_for_key(row["time"]),
+            "systolic": record_key[2],
+            "diastolic": record_key[3],
+            "pulse": record_key[4],
+            "oxygen": record_key[5],
+            "feeling": record_key[6],
+            "comment": record_key[7],
+        }
+
+        records_to_insert.append(record)
+        existing_keys.add(record_key)
+
+
+    if not records_to_insert:
+        if skipped_duplicates > 0:
+            return True, f"Новых записей нет. Пропущено дублей: {skipped_duplicates}."
+
+        return False, "В файле нет записей для импорта."
+
+
+    supabase = get_supabase_client()
+    supabase.table("health_records").insert(records_to_insert).execute()
+
+    return True, (
+        f"Импортировано записей: {len(records_to_insert)}. "
+        f"Пропущено дублей: {skipped_duplicates}."
+    )
+
 def value_or_default(value, default):
     if pd.isna(value):
         return default
@@ -531,6 +698,47 @@ with tab_history:
             file_name=f"health_diary_{history_year}_{history_month:02d}.csv",
             mime="text/csv",
         )
+
+        st.divider()
+
+        st.subheader("⬆️ Импортировать записи из CSV")
+
+        st.info(
+            "Импорт добавит записи из CSV в базу Supabase. "
+            "Текущие записи не будут удалены."
+        )
+
+        uploaded_backup = st.file_uploader(
+            "Выберите CSV-файл",
+            type=["csv"],
+        )
+
+        import_confirmed = st.checkbox(
+            "Я понимаю, что записи из файла будут добавлены в дневник"
+        )
+
+        if "import_message" in st.session_state:
+            if st.session_state.get("import_success"):
+                st.success(st.session_state["import_message"])
+            else:
+                st.error(st.session_state["import_message"])
+
+            del st.session_state["import_message"]
+            del st.session_state["import_success"]
+
+
+        if st.button("Импортировать записи"):
+            if uploaded_backup is None:
+                st.error("Сначала выберите CSV-файл.")
+            elif not import_confirmed:
+                st.error("Сначала подтвердите импорт.")
+            else:
+                imported, message = import_backup_to_supabase(uploaded_backup)
+
+                st.session_state["import_message"] = message
+                st.session_state["import_success"] = imported
+
+                st.rerun()
 
         st.divider()
         st.subheader("✏️ Редактировать запись")
