@@ -113,6 +113,17 @@ def format_average(value):
         return "Нет данных"
     return round(value, 1)
 
+def get_current_time_without_seconds():
+    return datetime.now().time().replace(second=0, microsecond=0)
+
+def format_display_value(value):
+    if pd.isna(value):
+        return "Не измерено"
+
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+
+    return str(value)
 
 st.set_page_config(
     page_title="Дневник здоровья",
@@ -160,11 +171,15 @@ st.markdown(
 tab_add, tab_history, tab_stats = st.tabs(
     ["➕ Добавить запись", "📋 История", "📊 Статистика"]
 )
-
 with tab_add:
     st.subheader("Добавить новую запись")
 
-    with st.form("health_form"):
+    if "add_form_counter" not in st.session_state:
+        st.session_state["add_form_counter"] = 0
+
+    form_counter = st.session_state["add_form_counter"]
+
+    with st.form(f"health_form_{form_counter}"):
         col1, col2 = st.columns(2)
 
         with col1:
@@ -183,14 +198,16 @@ with tab_add:
                     min_value=1,
                     max_value=31,
                     value=today.day,
+                    key=f"add_day_{form_counter}",
                 )
 
             with col_month:
                 month = st.selectbox(
                     "Месяц",
                     options=list(range(1, 13)),
-                    format_func=lambda x: month_names[x - 1],
+                    format_func=lambda x: MONTH_NAMES_RU[x - 1],
                     index=today.month - 1,
+                    key=f"add_month_{form_counter}",
                 )
 
             with col_year:
@@ -199,6 +216,7 @@ with tab_add:
                     min_value=2020,
                     max_value=2100,
                     value=today.year,
+                    key=f"add_year_{form_counter}",
                 )
 
             days_in_month = calendar.monthrange(year, month)[1]
@@ -209,9 +227,16 @@ with tab_add:
 
             record_date = date(year, month, day)
 
-            record_time = st.time_input("Время", value=datetime.now().time())
+            record_time = st.time_input(
+                "Время",
+                value=get_current_time_without_seconds(),
+                key=f"add_time_{form_counter}",
+            )
 
-            pressure_not_measured = st.checkbox("Давление не измерено")
+            pressure_not_measured = st.checkbox(
+                "Давление не измерено",
+                key=f"add_pressure_not_measured_{form_counter}",
+            )
 
             if pressure_not_measured:
                 systolic = None
@@ -219,20 +244,26 @@ with tab_add:
                 st.info("Давление будет сохранено как «не измерено».")
             else:
                 systolic = st.number_input(
-                    "Верхнее давление",
-                    min_value=50,
-                    max_value=250,
-                    value=120,
+                "Верхнее давление",
+                min_value=50,
+                max_value=250,
+                value=120,
+                key=f"add_systolic_{form_counter}",
                 )
+
                 diastolic = st.number_input(
                     "Нижнее давление",
                     min_value=30,
                     max_value=160,
                     value=80,
+                    key=f"add_diastolic_{form_counter}",
                 )
 
         with col2:
-            pulse_not_measured = st.checkbox("Пульс не измерен")
+            pulse_not_measured = st.checkbox(
+                "Пульс не измерен",
+                key=f"add_pulse_not_measured_{form_counter}",
+            )
 
             if pulse_not_measured:
                 pulse = None
@@ -243,10 +274,13 @@ with tab_add:
                     min_value=30,
                     max_value=220,
                     value=70,
+                    key=f"add_pulse_{form_counter}",
                 )
 
-
-            oxygen_not_measured = st.checkbox("Кислород не измерен")
+            oxygen_not_measured = st.checkbox(
+                "Кислород не измерен",
+                key=f"add_oxygen_not_measured_{form_counter}",
+            )
 
             if oxygen_not_measured:
                 oxygen = None
@@ -257,13 +291,20 @@ with tab_add:
                     min_value=50,
                     max_value=100,
                     value=98,
-    )
-                
+                    key=f"add_oxygen_{form_counter}",
+                )
+            
             feeling = st.selectbox(
                 "Самочувствие",
                 ["Хорошее", "Нормальное", "Плохое"],
+                key=f"add_feeling_{form_counter}",
             )
-            comment = st.text_area("Комментарий", placeholder="Например: болела голова, после прогулки, после таблеток...")
+
+            comment = st.text_area(
+                "Комментарий",
+                placeholder="Например: болела голова, после прогулки, после таблеток...",
+                key=f"add_comment_{form_counter}",
+            )
 
         submitted = st.form_submit_button("Сохранить запись")
 
@@ -280,7 +321,10 @@ with tab_add:
             }
 
             save_record(record)
+
+            st.session_state["add_form_counter"] += 1
             st.success("Запись сохранена!")
+            st.rerun()
 
 with tab_history:
     st.subheader("История записей")
@@ -372,10 +416,18 @@ with tab_history:
         display_df = filtered_df.copy()
 
         display_df["date"] = pd.to_datetime(display_df["date"]).dt.strftime("%d.%m.%Y")
-        display_df = display_df.fillna("Не измерено")
+
+        numeric_columns = ["systolic", "diastolic", "pulse", "oxygen"]
+
+        for column in numeric_columns:
+            display_df[column] = display_df[column].apply(format_display_value)
+
+        display_df["feeling"] = display_df["feeling"].fillna("Нормальное")
+        display_df["comment"] = display_df["comment"].fillna("")
+
         display_df = display_df.rename(columns=COLUMN_NAMES_RU)
 
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
+        st.dataframe(display_df, width="stretch", hide_index=True)
 
         csv_data = display_df.to_csv(index=False).encode("utf-8-sig")
 
@@ -701,7 +753,7 @@ with tab_stats:
                 padding={"bottom": 70}
             )
 
-            st.altair_chart(pressure_chart, use_container_width=True)
+            st.altair_chart(pressure_chart, width="stretch")
 
             st.write("### Пульс")
 
@@ -735,7 +787,7 @@ with tab_stats:
                 .properties(height=350)
             )
 
-            st.altair_chart(pulse_chart, use_container_width=True)
+            st.altair_chart(pulse_chart, width="stretch")
 
 
             st.write("### Кислород SpO₂")
@@ -770,7 +822,7 @@ with tab_stats:
                 .properties(height=350)
             )
 
-            st.altair_chart(oxygen_chart, use_container_width=True)
+            st.altair_chart(oxygen_chart, width="stretch")
 
 st.divider()
 st.caption("Приложение предназначено только для личного ведения дневника и не заменяет консультацию врача.")
